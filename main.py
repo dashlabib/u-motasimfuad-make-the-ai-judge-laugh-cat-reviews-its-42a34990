@@ -4,11 +4,14 @@
 
 The review lives in ``entry.txt`` next to this file. This program
 reads it, checks it against the bounty gate (UTF-8 text, a single
-line, 1 to 200 characters, not only white space), writes the exact
-text to ``entry.txt`` in the output directory, and reads it back to
-confirm the published bytes match. Standard library only: no network
-access, no clock reads, no randomness, so two runs always produce
-identical output.
+line, 1 to 200 characters, not only white space, and no control
+characters), writes the exact text to ``entry.txt`` in the output
+directory, and reads it back to confirm the published bytes match.
+A missing ``entry.txt`` or one that is not valid UTF-8 is reported
+as a clean error instead of a traceback. Pass ``--max-chars <n>``
+to check against a different length limit. Standard library only:
+no network access, no clock reads, no randomness, so two runs
+always produce identical output.
 
 The output directory is ``$MAKEFUN_OUTPUT_DIR`` when set, else
 ``/output``. Pass ``--output-dir <dir>`` to choose it on the command
@@ -26,19 +29,30 @@ MAX_CHARS = 200
 
 def load_line() -> str:
     here = Path(__file__).resolve().parent
-    text = (here / "entry.txt").read_text(encoding="utf-8")
+    try:
+        text = (here / "entry.txt").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise SystemExit("entry.txt is missing next to main.py")
+    except UnicodeDecodeError:
+        raise SystemExit("entry.txt is not valid UTF-8")
     return text.strip()
 
 
-def validate(text: str) -> None:
+def validate(text: str, max_chars: int = MAX_CHARS) -> None:
     if not text or text.isspace():
         raise SystemExit("entry is empty or only white space")
-    if len(text) > MAX_CHARS:
+    if len(text) > max_chars:
         raise SystemExit(
-            f"entry is {len(text)} characters, over the {MAX_CHARS} limit"
+            f"entry is {len(text)} characters, over the {max_chars} limit"
         )
     if "\n" in text or "\r" in text:
         raise SystemExit("entry must be a single line")
+    bad = [ch for ch in text if ord(ch) < 32 or ord(ch) == 127]
+    if bad:
+        raise SystemExit(
+            "entry contains control characters: "
+            + ", ".join(f"U+{ord(ch):04X}" for ch in sorted(set(bad)))
+        )
 
 
 def parse_args(argv=None):
@@ -47,15 +61,18 @@ def parse_args(argv=None):
                         help="directory to write entry.txt into")
     parser.add_argument("--verify-only", action="store_true",
                         help="validate the review without writing it")
+    parser.add_argument("--max-chars", type=int, default=MAX_CHARS,
+                        help="maximum entry length (default %(default)s)")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     text = load_line()
-    validate(text)
+    validate(text, args.max_chars)
     if args.verify_only:
-        print(f"Valid: {len(text)} characters")
+        words = len(text.split())
+        print(f"Valid: {len(text)} characters, {words} words")
         return 0
     out_dir = Path(args.output_dir or os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
     out_dir.mkdir(parents=True, exist_ok=True)
